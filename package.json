@@ -17,7 +17,7 @@
 	],
 	"repository": {
 		"type": "git",
-		"url": "TOOD THIS!!!!!!!!!!"
+		"url": "https://github.com/kobimiz/declerationToImplementation"
 	},
 	"main": "extension.js",
 	"contributes": {
