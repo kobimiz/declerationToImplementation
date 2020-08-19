@@ -18,7 +18,7 @@ const { firstNonWSCharIndex, firstWSCharIndex } = require('utility');
 // TODO support custom compiler path for checking
 
 let singleLineCommentsRegEx = /.*\/\/.*/g
-let multilineCommentsRegEx  = /.*\/\*\*((.|\n)*?)\*\//g
+let multilineCommentsRegEx  = /.*\/\*(.|\r\n|\n)*?\*\//g
 let scopeVisibilityRegEx = /.*(private|public|protected)\:/g
 let methodCleanerRegEx = /^(\s|\t|\n|\r|static)*/gm
 
@@ -205,3 +205,5 @@ function printRanges(string, ranges) {
 
 
 exports.default = defaultAction;
+
+defaultAction(null, [{_fsPath: 'query.h'}]);
