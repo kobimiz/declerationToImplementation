@@ -1,0 +1,40 @@
+{
+	"name": "cpp-decleration-to-implementation",
+	"version": "1.0.0",
+	"publisher": "kobimiz",
+	"engines": {
+		"vscode": "^1.41.0"
+	},
+	"displayName": "C++ Decleration to implementation",
+	"description": "Create implementation for c++ function prototypes.",
+	"icon": "images/icon.jpg",
+	"categories": [
+		"Other"
+	],
+	"activationEvents": [
+		"onCommand:cpp-decleration-to-implementation.create-implementation",
+		"onLanguage:cpp"
+	],
+	"repository": {
+		"type": "git",
+		"url": "TOOD THIS!!!!!!!!!!"
+	},
+	"main": "extension.js",
+	"contributes": {
+		"commands": [
+			{
+				"command": "cpp-decleration-to-implementation.create-implementation",
+				"title": "Create Implementation"
+			}
+		],
+		"menus": {
+			"explorer/context": [
+				{
+					"when": "resourceExtname == .h",
+					"command": "cpp-decleration-to-implementation.create-implementation",
+					"group": "C++ Helper@1"
+				}
+			]
+		}
+	}
+}
