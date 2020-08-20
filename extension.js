@@ -6,7 +6,7 @@ const vscode = require("vscode");
 // this method is called when your extension is activated
 // your extension is activated the very first time the command is executed
 function activate(context) {
-    context.subscriptions.push(vscode.commands.registerCommand('cpp-decleration-to-implementation.create-implementation', require('./index.js').default));
+    context.subscriptions.push(vscode.commands.registerCommand('cpp-decleration-to-implementation.create-implementation', require('./createUpdate.js').default));
 }
 exports.activate = activate;
 // this method is called when your extension is deactivated

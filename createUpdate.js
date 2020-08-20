@@ -14,11 +14,14 @@ const { firstNonWSCharIndex, firstWSCharIndex } = require('utility');
 // TODO support const methods (not changing)
 // TODO support operators
 // TODO support no name parameters
-// TODO handle cases where cpp file already exists (update\notify)
 // TODO support custom compiler path for checking
+// TODO support namespaces
+// TODO make includes in top of file (in case of multiple classes)
+// TODO add header file inclusion (detect if not included)
+// TODO detect methods in cpp file and not in header
 
 let singleLineCommentsRegEx = /.*\/\/.*/g
-let multilineCommentsRegEx  = /.*\/\*(.|\r\n|\n)*?\*\//g
+let multilineCommentsRegEx = /.*\/\*(.|\r\n|\n)*?\*\//g
 let scopeVisibilityRegEx = /.*(private|public|protected)\:/g
 let methodCleanerRegEx = /^(\s|\t|\n|\r|static)*/gm
 
@@ -34,35 +37,41 @@ function defaultAction(mainFile, activeFiles) {
  * for each method, generate implementation
  */
 function writeImplementation(headerFileName) {
-    fs.readFile(headerFileName, (err, data) => {
-        if (err) {
-            console.log('Can\'t open file.');
+    let cppFilePath = headerFileToCppFile(headerFileName);
+    fs.stat(cppFilePath, (err, stats) => {
+        let stream = fs.createWriteStream(cppFilePath, { flags:'a' });
+        if(err == null) {
+            getUnimplementedMethods(headerFileName).
+                forEach(method => stream.write('\n' + method.toImplementationString()));
+        } else if(err.code === 'ENOENT') {
+            // file does not exist
+            parseHeaderFile(headerFileName).forEach( _class => {
+                stream.write(_class.toImplementationString());
+            });
+        } else {
+            console.log('Some other error: ', err.code);
+        }
+        stream.end();
+    });
+
+}
+// returns a list of classes with methods
+function parseHeaderFile(filePath) {
+    // -fsyntax-only only checks compiler errors
+    // -w disables all compiler warnings
+    exec('g++ -fsyntax-only -w ' + filePath, (err, stdout, stderr) => {
+        if (stderr !== '') {
+            console.log('There are compiler errors.');
             return;
         }
-        // -fsyntax-only only checks compiler errors
-        // -w disables all compiler warnings
-        exec('g++ -fsyntax-only -w ' + headerFileName, (err, stdout, stderr) => {
-            if (stderr !== '') {
-                console.log('There are compiler errors.');
-                return;
-            }
-            console.log(data.toString());
-        });
-        source = data.toString().replace(singleLineCommentsRegEx, '');
-        source = source.replace(multilineCommentsRegEx , '');
-
-        // ranges calculated after comments were removed
-        let ranges = getClassesRange(source);
-        ranges.forEach(range => {
-            let parsed = parseClass(source, range);
-            fs.writeFile(headerFileToCppFile(headerFileName), parsed.toImplementationString(), err => {
-                if (err)
-                    console.log('An error occured.');
-                else
-                    console.log('Task successful.');
-            });
-        });
     });
+    let source = fs.readFileSync(filePath).toString();
+    source = source.replace(singleLineCommentsRegEx, '');
+    source = source.replace(multilineCommentsRegEx, '');
+
+    // ranges calculated after comments were removed
+    let ranges = getClassesRange(source);
+    return ranges.map(range => parseClass(source, range));
 }
 function getFileExtension(filePath) {
     return filePath.match(/\.\w*$/)[0];
@@ -71,7 +80,8 @@ function getHeaderFiles(filePaths) {
     return filePaths.filter(file => getFileExtension(file._fsPath) === '.h');
 }
 function headerFileToCppFile(fullPath) {
-    return fullPath.replace(/\.\w*/, '.cpp');
+    fullPath = fullPath.replace('headers\\', 'src\\');
+    return fullPath.replace(/\.\w*$/, '.cpp');
 }
 
 function parseClass(source, range) {
@@ -89,27 +99,29 @@ function parseClass(source, range) {
         // TODO for some reason the methodCleanerRegex doesn't remove the \r characters
         statement = statement.replace(/\r/g, '');
         // in case 'static' was after the type in the declaration
-        statement = statement.replace('static ','');
-        if (CPPClassMethod.isMethodDeclaration(statement))
-            methods.push(CPPClassMethod.parseMethod(className, statement));
-        else if (CPPClassMethod.isSpecialMember(statement))
-            methods.push(CPPClassMethod.parseSpecialMember(className, statement));
+        statement = statement.replace('static ', '');
+        if (!isMethodDeleted(statement)) {
+            if (CPPClassMethod.isMethodDeclaration(statement))
+                methods.push(CPPClassMethod.parseMethod(className, statement));
+            else if (CPPClassMethod.isSpecialMember(statement))
+                methods.push(CPPClassMethod.parseSpecialMember(className, statement));
+        }
     });
     return new CPPClass(className, methods);
 }
 
 function getClassName(source, range) {
     let classNameStartIndex = firstNonWSCharIndex(source, range.start + 'class'.length);
-    let classNameEndIndex   = firstWSCharIndex(source, classNameStartIndex);
+    let classNameEndIndex = firstWSCharIndex(source, classNameStartIndex);
     return source.substring(classNameStartIndex, classNameEndIndex);
 }
 function getClassesRange(source) {
     let output = [];
     let regEx = /class/g;
     let res;
-    while((res = regEx.exec(source)) !== null) {
+    while ((res = regEx.exec(source)) !== null) {
         const nearestOpeningBracket = source.indexOf('{', res.index);
-        const nearestSemicolon      = source.indexOf(';', res.index);
+        const nearestSemicolon = source.indexOf(';', res.index);
         // if this is a class forward declaration
         if (nearestSemicolon < nearestOpeningBracket && nearestSemicolon != -1)
             continue;
@@ -118,21 +130,21 @@ function getClassesRange(source) {
         output.push(new Range(res.index, classClosingBracket));
         lastRow = res.index + 1;
     }
-    return output;    
+    return output;
 }
-const BRACKETS = { CURVED : 1, RECT : 2, CURLY : 3, TRI : 4 };
+const BRACKETS = { CURVED: 1, RECT: 2, CURLY: 3, TRI: 4 };
 function getClosingBracketIndex(string, openingBracketIndex) {
     let s = new Stack();
     let bracketIndex = openingBracketIndex + 1;
     let bracketType = getBracketType(string[openingBracketIndex]);
-    
-    let openingBracket = getBracket(bracketType, true );
+
+    let openingBracket = getBracket(bracketType, true);
     let closingBracket = getBracket(bracketType, false);
 
     for (let i = openingBracketIndex + 1; i < string.length; i++) {
         if (string[i] == openingBracket)
             s.push(string[bracketIndex]);
-        else if(string[i] == closingBracket) {
+        else if (string[i] == closingBracket) {
             // assume string is in valid form since there are no compiler errors
             s.pop();
             if (s.isEmpty())
@@ -190,7 +202,7 @@ function printRanges(string, ranges) {
     let words = [];
     let loggedString = '';
 
-    loggedString += string.substring(0,ranges[0].start);
+    loggedString += string.substring(0, ranges[0].start);
     for (let i = 0; i < ranges.length - 1; i++) {
         words.push(string.substring(ranges[i].start, ranges[i].end + 1));
         loggedString += '\x1b[36m%s\x1b[0m';
@@ -203,7 +215,42 @@ function printRanges(string, ranges) {
     console.log(loggedString, ...words);
 }
 
+// -----------------------------------------
+// returns the implemented methods
+function getImplementedMethods(source) {
+    let methods = [];
+    source = source.replace(multilineCommentsRegEx, '');
+    source = source.replace(singleLineCommentsRegEx, '');
+    // remove preprocessor derivatives
+    source = source.replace(/#.*\n{0,1}/g, '');
+    source = source.replace(/(\t|\n|\r|static)*/g, '');
+    let signatures = source.split(/\s*\{(.|\n|\r\n|\r)*?\}(\s|\n|\r\n|\r)*/);
+    signatures = signatures.filter(item => item !== undefined && (isSpecialMemberImplementation(item) || isMethodImplementation(item)));
+    signatures = signatures.map(signature => signature + ' {\n\t\n}');
+    return signatures;
+}
+function isSpecialMemberImplementation(statement) {
+    return statement.search(/[a-zA-Z_][a-zA-Z_0-9\$]*::[a-zA-Z_$][a-zA-Z_$0-9]*\(.*\)/) !== -1;
+}
+function isMethodImplementation(statement) {
+    return statement.search(/[a-zA-Z_][a-zA-Z_0-9\*\&\$]*\s*[a-zA-Z_][a-zA-Z_0-9]*::[a-zA-Z_$][a-zA-Z_$0-9]*\(.*\)/) !== -1;
+}
+
+function getUnimplementedMethods(headerFile) {
+    let cppFile = headerFileToCppFile(headerFile);
+    let implemented = getImplementedMethods(fs.readFileSync(cppFile).toString());
+    let classes = parseHeaderFile(headerFile);
+    let output = [];
+    classes.forEach(_class => {
+        output = output.concat(
+            _class.methods.filter(method => implemented.indexOf(method.toImplementationString()) === -1)
+        );
+    });
+    return output;
+}
+// meaning marked deleted
+function isMethodDeleted(method) {
+    return method.search(/\s*=\s*delete\s*$/) !== -1;
+}
 
 exports.default = defaultAction;
-
-defaultAction(null, [{_fsPath: 'query.h'}]);
