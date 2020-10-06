@@ -5,56 +5,79 @@ const { Range } = require('range');
 const { CPPClassMethod } = require('cppClassMethod');
 const { CPPClass } = require('cppClass');
 const { firstNonWSCharIndex, firstWSCharIndex } = require('utility');
+const WordIterator = require('wordIterator');
 
 // TODO support pre processing
 // TODO support method attributes
 // TODO support structures
 // TODO support templates (although, their implementation is in the header file)
 // TODO group static methods and non static methods
-// TODO support const methods (not changing)
-// TODO support operators
 // TODO support no name parameters
 // TODO support custom compiler path for checking
 // TODO support namespaces
 // TODO make includes in top of file (in case of multiple classes)
 // TODO add header file inclusion (detect if not included)
 // TODO detect methods in cpp file and not in header
+// TODO implemented function does not detect functions implemented using initializer lists
 
 let singleLineCommentsRegEx = /.*\/\/.*/g
 let multilineCommentsRegEx = /.*\/\*(.|\r\n|\n)*?\*\//g
 let scopeVisibilityRegEx = /.*(private|public|protected)\:/g
-let methodCleanerRegEx = /^(\s|\t|\n|\r|static)*/gm
+let methodCleanerRegEx = /^(\s|\t|\n|\r|static|virtual)*/gm
 
+const BRACKETS = { CURVED: 1, RECT: 2, CURLY: 3, TRI: 4 };
+
+/**
+ * The function that gets called by vscode. Writes a corresponding
+ * cpp file for each header file included in activeFiles.
+ * @param {String} mainFile the active file- not used.
+ * @param {String[]} activeFiles the selected files.
+ */
 function defaultAction(mainFile, activeFiles) {
     let headerFiles = getHeaderFiles(activeFiles);
     headerFiles.forEach(headerFile => {
         writeImplementation(headerFile._fsPath);
     });
 }
+exports.test = function(path, isNewFile) {
+    let string = '';
+    if(!isNewFile) {
+        getUnimplementedMethods(path).
+            forEach(method => string += '\n' + method.toImplementationString());
+    } else {
+        parseHeaderFile(path).forEach( _class => {
+            string += _class.toImplementationString();
+        });
+    }
+    return string;
+};
 /**
- * parse file and divide to classes
- * each class will have an array of properties and methods
- * for each method, generate implementation
+ * Generates a cpp file for a given header file.
  */
 function writeImplementation(headerFileName) {
+    // get the cpp file's path
     let cppFilePath = headerFileToCppFile(headerFileName);
+
     fs.stat(cppFilePath, (err, stats) => {
+        // open a file for appending
         let stream = fs.createWriteStream(cppFilePath, { flags:'a' });
-        if(err == null) {
+
+        if (err == null) {
+            // if file exists
             getUnimplementedMethods(headerFileName).
                 forEach(method => stream.write('\n' + method.toImplementationString()));
-        } else if(err.code === 'ENOENT') {
+        } else if (err.code === 'ENOENT') {
             // file does not exist
             parseHeaderFile(headerFileName).forEach( _class => {
                 stream.write(_class.toImplementationString());
             });
-        } else {
+        } else
             console.log('Some other error: ', err.code);
-        }
         stream.end();
     });
 
 }
+
 // returns a list of classes with methods
 function parseHeaderFile(filePath) {
     // -fsyntax-only only checks compiler errors
@@ -84,24 +107,31 @@ function headerFileToCppFile(fullPath) {
     return fullPath.replace(/\.\w*$/, '.cpp');
 }
 
+/**
+ * Returns a CPPClass object representation of the class.
+ * @param {String} source the source file's code.
+ * @param {Range} range The range of characters where the class is located.
+ * Can be obtained with getClassesRange(source).
+ */
 function parseClass(source, range) {
     let className = getClassName(source, range);
     // remove inheritence text
     className = className.replace(/:.*/, '');
+
     let methods = [];
     let classSource = source.substring(range.start, range.end + 1);
     classSource = classSource.replace(scopeVisibilityRegEx, '');
 
     classSource = CPPClass.removeClassName(classSource);
     classSource = classSource.replace(methodCleanerRegEx, '');
+    
     statements = classSource.split(';');
     statements.forEach(statement => {
         // TODO for some reason the methodCleanerRegex doesn't remove the \r characters
         statement = statement.replace(/\r/g, '');
-        // in case 'static' was after the type in the declaration
-        statement = statement.replace('static ', '');
-        if (!isMethodDeleted(statement)) {
-            if (CPPClassMethod.isMethodDeclaration(statement))
+        if (!isMethodDeleted(statement) && !isMethodPureVirtual(statement) && !isTypedef(statement)) {
+            // TODO think of a cleaner way to to this    
+            if (CPPClassMethod.isMethodDeclaration(statement) || CPPClassMethod.isOperator(statement))
                 methods.push(CPPClassMethod.parseMethod(className, statement));
             else if (CPPClassMethod.isSpecialMember(statement))
                 methods.push(CPPClassMethod.parseSpecialMember(className, statement));
@@ -132,7 +162,6 @@ function getClassesRange(source) {
     }
     return output;
 }
-const BRACKETS = { CURVED: 1, RECT: 2, CURLY: 3, TRI: 4 };
 function getClosingBracketIndex(string, openingBracketIndex) {
     let s = new Stack();
     let bracketIndex = openingBracketIndex + 1;
@@ -153,6 +182,10 @@ function getClosingBracketIndex(string, openingBracketIndex) {
     }
     return -1;
 }
+/**
+ * Returns an enum value of the corresponding type.
+ * @param {String} bracket character literal of a bracket character.
+ */
 function getBracketType(bracket) {
     switch (bracket) {
         case '(' || ')':
@@ -165,6 +198,11 @@ function getBracketType(bracket) {
             return BRACKETS.TRI;
     }
 }
+/**
+ * Returns the corresponding bracket character.
+ * @param {BRACKETS} type The bracket type. Taken from enum.
+ * @param {boolean} isOpening If opening bracket or not.
+ */
 function getBracket(type, isOpening) {
     if (isOpening) {
         switch (type) {
@@ -189,6 +227,9 @@ function getBracket(type, isOpening) {
             return '>';
     }
 }
+
+// --------- Util ---------
+
 /**
  * Prints a string and parts of it in cyan.
  * @param {String} string The string to print to the console.
@@ -218,7 +259,6 @@ function printRanges(string, ranges) {
 // -----------------------------------------
 // returns the implemented methods
 function getImplementedMethods(source) {
-    let methods = [];
     source = source.replace(multilineCommentsRegEx, '');
     source = source.replace(singleLineCommentsRegEx, '');
     // remove preprocessor derivatives
@@ -235,7 +275,12 @@ function isSpecialMemberImplementation(statement) {
 function isMethodImplementation(statement) {
     return statement.search(/[a-zA-Z_][a-zA-Z_0-9\*\&\$]*\s*[a-zA-Z_][a-zA-Z_0-9]*::[a-zA-Z_$][a-zA-Z_$0-9]*\(.*\)/) !== -1;
 }
-
+function isTypedef(statement) {
+    let wi = new WordIterator.WordIterator(statement);
+    let firstWord = wi.nextWord().word;
+    // check if firstword is typedef
+    return firstWord.indexOf('typedef') == 0;
+}
 function getUnimplementedMethods(headerFile) {
     let cppFile = headerFileToCppFile(headerFile);
     let implemented = getImplementedMethods(fs.readFileSync(cppFile).toString());
@@ -251,6 +296,9 @@ function getUnimplementedMethods(headerFile) {
 // meaning marked deleted
 function isMethodDeleted(method) {
     return method.search(/\s*=\s*delete\s*$/) !== -1;
+}
+function isMethodPureVirtual(method) {
+    return method.search(/=[\s\t]*0[\s\t]*;/) !== -1;
 }
 
 exports.default = defaultAction;
